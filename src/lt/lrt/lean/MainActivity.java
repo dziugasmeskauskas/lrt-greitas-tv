@@ -39,13 +39,21 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public class MainActivity extends Activity {
@@ -91,7 +99,9 @@ public class MainActivity extends Activity {
     private LinearLayout programContainer;
     private LinearLayout channelChipRow;
     private LinearLayout dayChipRow;
+    private HorizontalScrollView channelChipScroll;
     private HorizontalScrollView dayChipScroll;
+    private TextView programHintText;
     private ListView programListView;
     private ProgramAdapter programAdapter;
     private VideoItem.ProgramGuide programGuide;
@@ -101,6 +111,33 @@ public class MainActivity extends Activity {
     private String programChannelCode = "LTV1";
     private int programSelectedRow = -1;
     private int programSelectedDay = -1;
+
+    // ================= FAVOURITE SHOWS =================
+    private static class FavoriteShow {
+        final String key;   // LrtApi.showKey(), matches guide entries across channels
+        final String title;
+        // Other names the guide uses, e.g. mediateka's "Dviračio žinios" airs as "Dviračio savaitė"
+        final List<String> aliases = new ArrayList<>();
+
+        FavoriteShow(String key, String title) {
+            this.key = key;
+            this.title = title;
+        }
+
+        boolean matches(String showKey) {
+            return key.equals(showKey) || aliases.contains(showKey);
+        }
+    }
+
+    private static class FavoriteMatch {
+        VideoItem.ProgramEntry next;      // airing now, or the soonest upcoming
+        VideoItem.ProgramEntry lastAired; // latest aired episode that has a recording
+        final List<VideoItem.ProgramEntry> upcoming = new ArrayList<>();
+    }
+
+    private final List<FavoriteShow> favorites = new ArrayList<>();
+    private VideoItem.Section favoritesSection;
+    private boolean favoritesMode = false;
 
     private final Runnable clockTicker = new Runnable() {
         @Override
@@ -112,10 +149,7 @@ public class MainActivity extends Activity {
             // Keep "DABAR" and the live progress bar moving while the guide is open
             if (programContainer != null && programContainer.getVisibility() == View.VISIBLE) {
                 programAdapter.notifyDataSetChanged();
-                if (programSelectedRow >= 0 && programSelectedRow < programRows.size()
-                        && programRows.get(programSelectedRow).entry != null) {
-                    updateHeroWithProgram(programRows.get(programSelectedRow).entry);
-                }
+                updateHeroForProgramRow(programSelectedRow);
             }
             handler.postDelayed(this, 15000);
         }
@@ -126,6 +160,18 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("lrt_lean_prefs", Context.MODE_PRIVATE);
         sections = LrtApi.getDefaultSections();
+        favoritesSection = new VideoItem.Section(
+                "favorites",
+                "❤️  Mėgstamos laidos",
+                "Kada rodoma kita jūsų mėgstamų laidų serija",
+                "",
+                false,
+                false
+        );
+        loadFavorites();
+        if (!favorites.isEmpty()) {
+            sections.add(indexOfProgramSection() + 1, favoritesSection);
+        }
 
         buildUi();
         ensureBluetoothSpeakerConnected();
@@ -141,7 +187,7 @@ public class MainActivity extends Activity {
         LrtApi.fetchProgramGuide(false, new LrtApi.Callback<VideoItem.ProgramGuide>() {
             @Override
             public void onResult(VideoItem.ProgramGuide guide, Exception error) {
-                if (guide != null && !sections.get(activeSectionIndex).isProgram
+                if (guide != null && !isGuideSectionActive()
                         && selectedGridIndex >= 0 && selectedGridIndex < currentItems.size()
                         && currentItems.get(selectedGridIndex).isLive) {
                     updateHeroWithItem(currentItems.get(selectedGridIndex));
@@ -264,7 +310,7 @@ public class MainActivity extends Activity {
             @Override
             public boolean onKey(View v, int keyCode, KeyEvent event) {
                 if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-                    if (sections.get(activeSectionIndex).isProgram && programContainer.getVisibility() == View.VISIBLE) {
+                    if (isGuideSectionActive() && programContainer.getVisibility() == View.VISIBLE) {
                         focusProgramList();
                         return true;
                     }
@@ -454,6 +500,12 @@ public class MainActivity extends Activity {
                         openProgramSection(item.channelCode);
                         return true;
                     }
+                    // Inside a show's episode list, long OK stars the show
+                    if (customCategoryTitle != null && !item.isLive) {
+                        toggleFavorite(customCategoryTitle, repeatedEpisodeTitleKeys());
+                        updateHeroWithItem(item);
+                        return true;
+                    }
                     if (item.categoryId != null && !item.categoryId.isEmpty() && !item.isLive) {
                         openCategoryDrilldown(item.categoryId, item.categoryTitle != null && !item.categoryTitle.isEmpty() ? item.categoryTitle : item.title);
                         return true;
@@ -477,6 +529,11 @@ public class MainActivity extends Activity {
                             VideoItem item = currentItems.get(pos);
                             if (item.isLive && item.channelCode != null && !item.channelCode.isEmpty()) {
                                 openProgramSection(item.channelCode);
+                                return true;
+                            }
+                            if (customCategoryTitle != null && !item.isLive) {
+                                toggleFavorite(customCategoryTitle, repeatedEpisodeTitleKeys());
+                                updateHeroWithItem(item);
                                 return true;
                             }
                             if (item.categoryId != null && !item.categoryId.isEmpty() && !item.isLive) {
@@ -763,8 +820,9 @@ public class MainActivity extends Activity {
         heroCategoryBadge.setText(sec.title.replaceAll("^[^A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]+", "").trim().toUpperCase());
         heroMetaText.setText(sec.subtitle);
 
-        if (sec.isProgram) {
+        if (sec.isProgram || sec.isFavorites) {
             setProgramMode(true);
+            setFavoritesMode(sec.isFavorites);
             loadProgramGuide(focusGridOrRefresh);
             return;
         }
@@ -893,6 +951,12 @@ public class MainActivity extends Activity {
             if (meta.length() > 0) meta.append("  •  ");
             meta.append("Ilgas OK: visos laidos serijos");
         }
+        if (!item.isLive && customCategoryTitle != null) {
+            if (meta.length() > 0) meta.append("  •  ");
+            meta.append(isFavorite(LrtApi.showKey(customCategoryTitle))
+                    ? "★ Mėgstama laida (ilgas OK: pašalinti)"
+                    : "Ilgas OK: ★ į mėgstamas");
+        }
         if (item.isLive && item.channelCode != null && !item.channelCode.isEmpty()) {
             if (meta.length() > 0) meta.append("  •  ");
             meta.append("Ilgas OK: programa");
@@ -940,10 +1004,10 @@ public class MainActivity extends Activity {
         // Channel tabs
         channelChipRow = new LinearLayout(this);
         channelChipRow.setOrientation(LinearLayout.HORIZONTAL);
-        HorizontalScrollView channelScroll = new HorizontalScrollView(this);
-        channelScroll.setHorizontalScrollBarEnabled(false);
-        channelScroll.addView(channelChipRow);
-        programContainer.addView(channelScroll);
+        channelChipScroll = new HorizontalScrollView(this);
+        channelChipScroll.setHorizontalScrollBarEnabled(false);
+        channelChipScroll.addView(channelChipRow);
+        programContainer.addView(channelChipScroll);
 
         // Day tabs (4 days back ... 6 days ahead)
         dayChipRow = new LinearLayout(this);
@@ -985,9 +1049,7 @@ public class MainActivity extends Activity {
                 programSelectedRow = position;
                 programAdapter.notifyDataSetChanged();
                 ProgramRow row = programRows.get(position);
-                if (row.entry != null) {
-                    updateHeroWithProgram(row.entry);
-                }
+                updateHeroForProgramRow(position);
                 if (row.dayIndex != programSelectedDay) {
                     programSelectedDay = row.dayIndex;
                     refreshProgramChipStyles();
@@ -1010,9 +1072,20 @@ public class MainActivity extends Activity {
         programListView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                if (position >= 0 && position < programRows.size() && programRows.get(position).entry != null) {
-                    playProgramEntry(programRows.get(position).entry);
+                if (position < 0 || position >= programRows.size()) return;
+                ProgramRow row = programRows.get(position);
+                if (row.favorite != null) {
+                    playFavorite(row.favorite);
+                } else if (row.entry != null) {
+                    playProgramEntry(row.entry);
                 }
+            }
+        });
+
+        programListView.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override
+            public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                return onProgramRowLongPress(position);
             }
         });
 
@@ -1026,12 +1099,21 @@ public class MainActivity extends Activity {
                         return true;
                     case KeyEvent.KEYCODE_DPAD_RIGHT:
                         return true;
+                    case KeyEvent.KEYCODE_MENU:
+                    case KeyEvent.KEYCODE_INFO:
+                        return onProgramRowLongPress(programListView.getSelectedItemPosition());
                     case KeyEvent.KEYCODE_DPAD_UP:
                         if (programListView.getSelectedItemPosition() <= firstProgramEntryRow()) {
-                            focusDayChip();
+                            if (!favoritesMode) {
+                                focusDayChip();
+                            }
                             return true;
                         }
                         return false;
+                }
+                // Channel and day keys only make sense in the full guide
+                if (favoritesMode) return false;
+                switch (keyCode) {
                     case KeyEvent.KEYCODE_CHANNEL_UP:
                         stepProgramChannel(1);
                         return true;
@@ -1052,14 +1134,13 @@ public class MainActivity extends Activity {
         });
         programContainer.addView(programListView);
 
-        TextView hint = new TextView(this);
-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        hint.setTextColor(0xFF607D8B);
-        hint.setSingleLine(true);
-        hint.setEllipsize(TextUtils.TruncateAt.END);
-        hint.setPadding(dp(4), dp(6), dp(4), 0);
-        hint.setText("OK: žiūrėti  •  ATGAL: kanalai ir dienos  •  CH+/CH−: kitas kanalas  •  ⏪/⏩: kita diena  •  ◀ meniu");
-        programContainer.addView(hint);
+        programHintText = new TextView(this);
+        programHintText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        programHintText.setTextColor(0xFF607D8B);
+        programHintText.setSingleLine(true);
+        programHintText.setEllipsize(TextUtils.TruncateAt.END);
+        programHintText.setPadding(dp(4), dp(6), dp(4), 0);
+        programContainer.addView(programHintText);
 
         parent.addView(programContainer);
     }
@@ -1227,12 +1308,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    // The favourites section reuses the guide list, without channel and day tabs
+    private void setFavoritesMode(boolean on) {
+        favoritesMode = on;
+        channelChipScroll.setVisibility(on ? View.GONE : View.VISIBLE);
+        dayChipScroll.setVisibility(on ? View.GONE : View.VISIBLE);
+        programHintText.setText(on
+                ? "OK: žiūrėti tiesiogiai arba paskutinę seriją  •  Ilgas OK: pašalinti iš mėgstamų  •  ◀ meniu"
+                : "OK: žiūrėti  •  Ilgas OK: ★ mėgstama  •  ATGAL: kanalai ir dienos  •  CH+/CH−: kanalas  •  ⏪/⏩: diena");
+    }
+
+    private boolean isGuideSectionActive() {
+        VideoItem.Section sec = sections.get(activeSectionIndex);
+        return sec.isProgram || sec.isFavorites;
+    }
+
     private void loadProgramGuide(final boolean focusList) {
         loadingBar.setVisibility(View.VISIBLE);
         LrtApi.fetchProgramGuide(false, new LrtApi.Callback<VideoItem.ProgramGuide>() {
             @Override
             public void onResult(VideoItem.ProgramGuide guide, Exception error) {
-                if (!sections.get(activeSectionIndex).isProgram) return;
+                if (!isGuideSectionActive()) return;
                 loadingBar.setVisibility(View.GONE);
                 if (guide == null || guide.channels.isEmpty()) {
                     statusText.setText("Nepavyko užkrauti TV programos. Patikrinkite ryšį ir spauskite OK.");
@@ -1244,7 +1340,11 @@ public class MainActivity extends Activity {
                     programGuide = guide;
                     rebuildProgramChips();
                 }
-                showProgramChannel(programChannelCode);
+                if (favoritesMode) {
+                    showFavorites();
+                } else {
+                    showProgramChannel(programChannelCode);
+                }
                 if (focusList) {
                     focusProgramList();
                 }
@@ -1287,9 +1387,7 @@ public class MainActivity extends Activity {
         boolean headerAbove = row > 0 && programRows.get(row - 1).entry == null;
         programListView.setSelectionFromTop(row, showPrevious && !headerAbove ? dp(58) : dp(30));
         programAdapter.notifyDataSetChanged();
-        if (r.entry != null) {
-            updateHeroWithProgram(r.entry);
-        }
+        updateHeroForProgramRow(row);
         refreshProgramChipStyles();
         scrollDayChipIntoView();
     }
@@ -1409,6 +1507,9 @@ public class MainActivity extends Activity {
         heroCategoryBadge.setBackground(badgeBg);
 
         StringBuilder meta = new StringBuilder();
+        if (isFavorite(e.showKey)) {
+            meta.append("★  ");
+        }
         meta.append(dayChipLabel(e.dayIndex)).append("  ").append(e.timeStart).append("–").append(e.timeEnd);
         if (live) {
             meta.append("  •  🔴 DABAR ETERYJE, liko ").append(formatMinutes((e.endMs - now + 59999) / 60000));
@@ -1482,6 +1583,331 @@ public class MainActivity extends Activity {
         navListView.setSelectionFromTop(index, navRow != null ? navRow.getTop() : 0);
     }
 
+    private void updateHeroForProgramRow(int position) {
+        if (position < 0 || position >= programRows.size()) return;
+        ProgramRow row = programRows.get(position);
+        if (row.favorite != null) {
+            updateHeroWithFavorite(row.favorite);
+        } else if (row.entry != null) {
+            updateHeroWithProgram(row.entry);
+        }
+    }
+
+    // Long OK (or MENU) on a row: in the guide it stars/unstars the show, in favourites it removes it
+    private boolean onProgramRowLongPress(int position) {
+        if (position < 0 || position >= programRows.size()) return false;
+        ProgramRow row = programRows.get(position);
+        if (row.favorite != null) {
+            removeFavorite(row.favorite, position);
+            return true;
+        }
+        if (row.entry != null) {
+            toggleFavorite(row.entry.title);
+            programAdapter.notifyDataSetChanged();
+            updateHeroForProgramRow(position);
+            return true;
+        }
+        return false;
+    }
+
+    // ================= FAVOURITE SHOWS =================
+    private void loadFavorites() {
+        favorites.clear();
+        try {
+            JSONArray arr = new JSONArray(prefs.getString("favorite_shows", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                FavoriteShow f = new FavoriteShow(o.getString("key"), o.getString("title"));
+                JSONArray aliases = o.optJSONArray("aliases");
+                for (int a = 0; aliases != null && a < aliases.length(); a++) {
+                    f.aliases.add(aliases.getString(a));
+                }
+                favorites.add(f);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void saveFavorites() {
+        JSONArray arr = new JSONArray();
+        for (FavoriteShow f : favorites) {
+            try {
+                arr.put(new JSONObject().put("key", f.key).put("title", f.title).put("aliases", new JSONArray(f.aliases)));
+            } catch (JSONException ignored) {
+            }
+        }
+        prefs.edit().putString("favorite_shows", arr.toString()).apply();
+    }
+
+    private FavoriteShow findFavorite(String key) {
+        if (key == null || key.isEmpty()) return null;
+        for (FavoriteShow f : favorites) {
+            if (f.matches(key)) return f;
+        }
+        return null;
+    }
+
+    private boolean isFavorite(String key) {
+        return findFavorite(key) != null;
+    }
+
+    private void toggleFavorite(String title) {
+        toggleFavorite(title, new ArrayList<String>());
+    }
+
+    private void toggleFavorite(String title, List<String> aliases) {
+        String key = LrtApi.showKey(title);
+        if (key.isEmpty()) return;
+        FavoriteShow existing = findFavorite(key);
+        if (existing != null) {
+            favorites.remove(existing);
+            Toast.makeText(this, "Pašalinta iš mėgstamų: " + existing.title, Toast.LENGTH_SHORT).show();
+        } else {
+            FavoriteShow fav = new FavoriteShow(key, LrtApi.showTitle(title));
+            for (String alias : aliases) {
+                if (!alias.equals(key) && !fav.aliases.contains(alias)) fav.aliases.add(alias);
+            }
+            favorites.add(fav);
+            Toast.makeText(this, "★ " + fav.title + " – pridėta į „Mėgstamos laidos“", Toast.LENGTH_SHORT).show();
+        }
+        saveFavorites();
+        syncFavoritesSection();
+    }
+
+    // Episode titles that repeat across a show's list are its on-air name rather than episode names
+    private List<String> repeatedEpisodeTitleKeys() {
+        Map<String, Integer> counts = new HashMap<>();
+        for (VideoItem item : currentItems) {
+            String k = LrtApi.showKey(item.title);
+            if (!k.isEmpty()) counts.put(k, counts.containsKey(k) ? counts.get(k) + 1 : 1);
+        }
+        List<String> keys = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getValue() >= 2) keys.add(e.getKey());
+        }
+        return keys;
+    }
+
+    private void removeFavorite(FavoriteShow fav, int position) {
+        favorites.remove(fav);
+        saveFavorites();
+        Toast.makeText(this, "Pašalinta iš mėgstamų: " + fav.title, Toast.LENGTH_SHORT).show();
+        if (favorites.isEmpty()) {
+            syncFavoritesSection();
+            return;
+        }
+        showFavorites();
+        // Stay near the removed row
+        for (int i = Math.min(position, programRows.size() - 1); i >= 0; i--) {
+            if (programRows.get(i).entry != null) {
+                positionProgramList(i, false);
+                return;
+            }
+        }
+    }
+
+    private int indexOfProgramSection() {
+        for (int i = 0; i < sections.size(); i++) {
+            if (sections.get(i).isProgram) return i;
+        }
+        return 0;
+    }
+
+    // The "Mėgstamos laidos" section exists only while something is starred; it sits right under "TV programa"
+    private void syncFavoritesSection() {
+        int favIndex = -1;
+        for (int i = 0; i < sections.size(); i++) {
+            if (sections.get(i).isFavorites) favIndex = i;
+        }
+        boolean want = !favorites.isEmpty();
+        if (want == (favIndex >= 0)) return;
+        if (pendingSectionLoad != null) {
+            handler.removeCallbacks(pendingSectionLoad);
+        }
+
+        if (want) {
+            int at = indexOfProgramSection() + 1;
+            sections.add(at, favoritesSection);
+            if (activeSectionIndex >= at) activeSectionIndex++;
+        } else {
+            boolean wasActive = activeSectionIndex == favIndex;
+            sections.remove(favIndex);
+            if (activeSectionIndex > favIndex) activeSectionIndex--;
+            if (wasActive) {
+                int programIndex = indexOfProgramSection();
+                navAdapter.notifyDataSetChanged();
+                navListView.setSelection(programIndex);
+                selectSection(programIndex, false);
+                navListView.requestFocus();
+                return;
+            }
+        }
+        navAdapter.notifyDataSetChanged();
+        // Keep the sidebar from jumping: same rows in the same place, selection follows the active section
+        View first = navListView.getChildAt(0);
+        int top = 0;
+        if (first != null) {
+            int rowHeight = first.getHeight() + navListView.getDividerHeight();
+            top = first.getTop() + (activeSectionIndex - navListView.getFirstVisiblePosition()) * rowHeight;
+        }
+        navListView.setSelectionFromTop(activeSectionIndex, top);
+    }
+
+    private FavoriteMatch matchFavorite(FavoriteShow fav) {
+        FavoriteMatch m = new FavoriteMatch();
+        if (programGuide == null) return m;
+        long now = System.currentTimeMillis();
+        for (VideoItem.ProgramChannel ch : programGuide.channels) {
+            for (VideoItem.ProgramEntry e : ch.entries) {
+                if (!fav.matches(e.showKey)) continue;
+                if (e.endMs > now) {
+                    m.upcoming.add(e);
+                } else if (e.hasRecording() && (m.lastAired == null || e.startMs > m.lastAired.startMs)) {
+                    m.lastAired = e;
+                }
+            }
+        }
+        Collections.sort(m.upcoming, new Comparator<VideoItem.ProgramEntry>() {
+            @Override
+            public int compare(VideoItem.ProgramEntry a, VideoItem.ProgramEntry b) {
+                return Long.compare(a.startMs, b.startMs);
+            }
+        });
+        if (!m.upcoming.isEmpty()) {
+            m.next = m.upcoming.get(0);
+        }
+        return m;
+    }
+
+    // One row per favourite at its next airing, grouped by day; shows not in the guide go last
+    private void showFavorites() {
+        programRows.clear();
+        List<ProgramRow> scheduled = new ArrayList<>();
+        List<ProgramRow> unscheduled = new ArrayList<>();
+        for (FavoriteShow fav : favorites) {
+            FavoriteMatch m = matchFavorite(fav);
+            if (m.next != null) {
+                scheduled.add(new ProgramRow(m.next.dayIndex, m.next, fav));
+            } else {
+                unscheduled.add(new ProgramRow(-1, m.lastAired != null ? m.lastAired : placeholderEntry(fav), fav));
+            }
+        }
+        Collections.sort(scheduled, new Comparator<ProgramRow>() {
+            @Override
+            public int compare(ProgramRow a, ProgramRow b) {
+                return Long.compare(a.entry.startMs, b.entry.startMs);
+            }
+        });
+
+        int lastDay = Integer.MIN_VALUE;
+        for (ProgramRow r : scheduled) {
+            if (r.dayIndex != lastDay) {
+                programRows.add(new ProgramRow(r.dayIndex, null));
+                lastDay = r.dayIndex;
+            }
+            programRows.add(r);
+        }
+        if (!unscheduled.isEmpty()) {
+            programRows.add(new ProgramRow(-1, null));
+            programRows.addAll(unscheduled);
+        }
+        programAdapter.notifyDataSetChanged();
+
+        int first = firstProgramEntryRow();
+        if (first >= 0) {
+            positionProgramList(first, false);
+        }
+    }
+
+    // Stands in for a favourite that isn't in the guide's 11 days; startMs = endMs = 0 counts as aired
+    private VideoItem.ProgramEntry placeholderEntry(FavoriteShow fav) {
+        VideoItem.ProgramEntry e = new VideoItem.ProgramEntry();
+        e.title = fav.title;
+        e.description = "";
+        e.timeStart = "—";
+        e.timeEnd = "";
+        e.dayIndex = -1;
+        e.recordId = "";
+        e.recordUrl = "";
+        e.channelCode = "";
+        e.channelTitle = "";
+        e.showKey = fav.key;
+        return e;
+    }
+
+    private String favoriteRowNote(ProgramRow row) {
+        VideoItem.ProgramEntry e = row.entry;
+        if (row.dayIndex < 0) {
+            if (e.dayIndex < 0) return "Artimiausių dienų programoje šios laidos nėra";
+            return "Paskutinė serija: " + dayChipLabel(e.dayIndex) + " " + e.timeStart + "  ·  " + e.channelTitle;
+        }
+        String note = e.channelTitle + "  ·  " + e.timeStart + "–" + e.timeEnd;
+        return e.description.isEmpty() ? note : note + "  ·  " + e.description;
+    }
+
+    private void updateHeroWithFavorite(FavoriteShow fav) {
+        FavoriteMatch m = matchFavorite(fav);
+        long now = System.currentTimeMillis();
+        VideoItem.ProgramEntry next = m.next;
+        boolean live = next != null && next.isNow(now);
+
+        heroCategoryBadge.setText(next != null ? next.channelTitle.toUpperCase(LT_LOCALE) : "MĖGSTAMA LAIDA");
+        GradientDrawable badgeBg = new GradientDrawable();
+        badgeBg.setCornerRadius(dp(4));
+        badgeBg.setColor(live ? 0xFFE53935 : (next != null ? 0xFF0077C8 : 0xFF455A64));
+        heroCategoryBadge.setBackground(badgeBg);
+
+        StringBuilder meta = new StringBuilder("★  ");
+        if (live) {
+            meta.append("🔴 DABAR ETERYJE, liko ").append(formatMinutes((next.endMs - now + 59999) / 60000));
+            meta.append("  •  OK: žiūrėti tiesiogiai");
+        } else {
+            if (next != null) {
+                meta.append("Kita serija: ").append(dayChipLabel(next.dayIndex)).append(" ").append(next.timeStart);
+                meta.append(", po ").append(formatMinutes((next.startMs - now + 59999) / 60000));
+            } else {
+                meta.append("Kitos serijos laikas dar neskelbiamas");
+            }
+            if (m.lastAired != null) {
+                meta.append("  •  OK: paskutinė serija (").append(dayChipLabel(m.lastAired.dayIndex))
+                        .append(" ").append(m.lastAired.timeStart).append(")");
+            }
+        }
+        meta.append("  •  Ilgas OK: pašalinti");
+        heroMetaText.setText(meta.toString());
+
+        heroTitleText.setText(fav.title);
+        StringBuilder desc = new StringBuilder();
+        if (m.upcoming.size() > 1) {
+            desc.append("Vėliau: ");
+            for (int i = 1; i < Math.min(5, m.upcoming.size()); i++) {
+                VideoItem.ProgramEntry e = m.upcoming.get(i);
+                if (i > 1) desc.append(",  ");
+                desc.append(dayChipLabel(e.dayIndex)).append(" ").append(e.timeStart);
+            }
+            desc.append("\n");
+        }
+        VideoItem.ProgramEntry about = next != null ? next : m.lastAired;
+        if (about != null && !about.description.isEmpty()) {
+            desc.append(about.description);
+        }
+        heroDescText.setText(desc.toString());
+    }
+
+    // OK on a favourite: live if it's on now, else the latest recording, else when it airs next
+    private void playFavorite(FavoriteShow fav) {
+        FavoriteMatch m = matchFavorite(fav);
+        if (m.next != null && m.next.isNow(System.currentTimeMillis())) {
+            playProgramEntry(m.next);
+        } else if (m.lastAired != null) {
+            playProgramEntry(m.lastAired);
+        } else if (m.next != null) {
+            playProgramEntry(m.next);
+        } else {
+            Toast.makeText(this, "Kitos „" + fav.title + "“ serijos laikas dar neskelbiamas", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private static String formatMinutes(long minutes) {
         if (minutes < 60) return minutes + " min.";
         long hours = minutes / 60;
@@ -1538,7 +1964,11 @@ public class MainActivity extends Activity {
             return;
         }
         if (programListView != null && programListView.hasFocus()) {
-            focusChannelChip();
+            if (favoritesMode) {
+                navListView.requestFocus();
+            } else {
+                focusChannelChip();
+            }
             return;
         }
         if (programContainer != null && programContainer.hasFocus()) {
@@ -1845,12 +2275,18 @@ public class MainActivity extends Activity {
 
     // ================= TV PROGRAM ADAPTER =================
     private static class ProgramRow {
-        final int dayIndex;
+        final int dayIndex;                 // -1 = favourites not in the guide
         final VideoItem.ProgramEntry entry; // null = day header
+        final FavoriteShow favorite;        // set in the favourites section
 
         ProgramRow(int dayIndex, VideoItem.ProgramEntry entry) {
+            this(dayIndex, entry, null);
+        }
+
+        ProgramRow(int dayIndex, VideoItem.ProgramEntry entry, FavoriteShow favorite) {
             this.dayIndex = dayIndex;
             this.entry = entry;
+            this.favorite = favorite;
         }
     }
 
@@ -1917,7 +2353,9 @@ public class MainActivity extends Activity {
                     header.setSingleLine(true);
                     header.setPadding(dp(4), dp(8), dp(4), dp(2));
                 }
-                header.setText(dayHeaderLabel(row.dayIndex).toUpperCase(LT_LOCALE));
+                header.setText(row.dayIndex < 0
+                        ? "KITA SERIJA DAR NESKELBIAMA"
+                        : dayHeaderLabel(row.dayIndex).toUpperCase(LT_LOCALE));
                 return header;
             }
 
@@ -2027,9 +2465,14 @@ public class MainActivity extends Activity {
             boolean dim = past && !focused;
             h.time.setText(e.timeStart);
             h.time.setTextColor(live ? 0xFFFF5252 : (dim ? 0xFF607D8B : 0xFF00E5FF));
-            h.title.setText(e.title);
+            if (row.favorite != null) {
+                h.title.setText(row.favorite.title);
+                h.desc.setText(favoriteRowNote(row));
+            } else {
+                h.title.setText(isFavorite(e.showKey) ? "★ " + e.title : e.title);
+                h.desc.setText(e.description.isEmpty() ? "iki " + e.timeEnd : "iki " + e.timeEnd + "  ·  " + e.description);
+            }
             h.title.setTextColor(dim ? 0xFF8FA3BF : Color.WHITE);
-            h.desc.setText(e.description.isEmpty() ? "iki " + e.timeEnd : "iki " + e.timeEnd + "  ·  " + e.description);
             h.desc.setTextColor(dim ? 0xFF5F7389 : 0xFF90A4AE);
 
             if (live) {

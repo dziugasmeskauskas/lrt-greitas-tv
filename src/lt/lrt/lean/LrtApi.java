@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
@@ -423,6 +424,7 @@ public class LrtApi {
                     e.recordId = jsonStr(obj, "record_article_id");
                     e.recordUrl = jsonStr(obj, "record_url");
                     e.isRadio = "1".equals(jsonStr(obj, "is_radio"));
+                    e.showKey = showKey(e.title);
                     e.channelCode = code;
                     e.channelTitle = channel.title;
                     channel.entries.add(e);
@@ -433,6 +435,21 @@ public class LrtApi {
         guide.channels.addAll(byCode.values());
         guide.fetchedAtMs = System.currentTimeMillis();
         return guide;
+    }
+
+    // "Panorama (su vertimu į gestų k.)" in the guide and "Panorama" in the mediateka are the same show
+    public static String showKey(String title) {
+        if (title == null) return "";
+        return title.toLowerCase(Locale.ROOT)
+                .replaceAll("\\(.*?\\)", " ")
+                .replaceAll("[^\\p{L}\\p{N}]+", " ")
+                .trim();
+    }
+
+    public static String showTitle(String title) {
+        if (title == null) return "";
+        String t = title.replaceAll("\\s*\\(.*?\\)", "").trim();
+        return t.isEmpty() ? title.trim() : t;
     }
 
     // optString() turns JSON null into "null"
