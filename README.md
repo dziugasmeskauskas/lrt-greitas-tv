@@ -1,14 +1,20 @@
 # LRT Greitas (`lt.lrt.lean`) — Ultra-Lean Native Android TV App for LRT.lt
 
-A blazing-fast, **53 KB**, zero-dependency native Android TV application for **LRT.lt** (`Lietuvos nacionalinis radijas ir televizija`), built directly against the Android SDK without WebViews, React Native, or bloated frameworks.
+A blazing-fast, **65 KB**, zero-dependency native Android TV application for **LRT.lt** (`Lietuvos nacionalinis radijas ir televizija`), built directly against the Android SDK without WebViews, React Native, or bloated frameworks.
 
 ---
 
 ## Features
 
-- **100% Native Android TV UI (< 15 MB RAM, 53 KB APK):**
+- **100% Native Android TV UI (< 15 MB RAM, 65 KB APK):**
   - Instant startup (`< 150 ms`) and 60 fps D-pad navigation even on budget MediaTek Android TVs.
   - Parallel background feed prefetching and in-memory LRU thumbnail cache.
+- **📅 TV programa (Program Guide):**
+  - What's on now, what's next and what already aired on every LRT TV and radio channel — 4 days back, 6 days ahead (`/api/json/tvprog`).
+  - The current show is marked **DABAR** with a live progress bar; the list opens on it with the previous show just above.
+  - **OK** on the current show plays the channel live; **OK** on an aired show (or a rerun) plays its LRT mediateka/radioteka recording (`▶ ĮRAŠAS`), with resume memory shared with the rest of the app.
+  - Channel and day tabs on top. In the list: **ATGAL** jumps to the tabs, **CH+/CH−** switch channel, **⏪/⏩** switch day, **◀** back to the menu.
+  - Long-press **OK** (or **MENU**) on a live channel opens its program; the remote's **GUIDE** key opens it from anywhere. The live hero also shows what's next (`Toliau`).
 - **Dedicated Sections:**
   - 🔴 **Tiesiogiai (Live):** Live HLS streams for `LRT TELEVIZIJA`, `LRT PLIUS`, `LRT LITUANICA`, `LRT RADIJAS`, `LRT KLASIKA`, and `LRT OPUS` with real-time on-air program schedules.
   - 🏆 **Auksinis protas** (`category_id=114`)
@@ -47,8 +53,12 @@ A blazing-fast, **53 KB**, zero-dependency native Android TV application for **L
 
 ## Build & Deploy via ADB
 
-Requires Android SDK (`build-tools/34.0.0`, `platforms/android-34`) and JDK 11+:
+Requires the Android SDK (the newest installed `build-tools` and `platforms` are used) and JDK 11+ (Android Studio's bundled JBR by default):
 
 ```bash
 bash build.sh
 ```
+
+- With more than one device attached, pick the TV: `ANDROID_SERIAL=<tv-ip>:5555 bash build.sh`
+- Build only, no install: `NO_INSTALL=1 bash build.sh`
+- The signing key lives at `~/.android/lrt-greitas.keystore` (override with `LRT_KEYSTORE`), outside the repo, so a fresh clone can still update the installed app. A build signed with a different key can only be installed after `adb uninstall lt.lrt.lean`, which wipes the app's resume positions.

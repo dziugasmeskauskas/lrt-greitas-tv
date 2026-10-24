@@ -19,8 +19,13 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -52,6 +57,14 @@ public class LrtApi {
                 "LRT Televizija, LRT Plius, LRT Lituanica ir radijas tiesiogiai",
                 BASE_API + "/live/",
                 true,
+                false
+        ));
+        list.add(new VideoItem.Section(
+                "program",
+                "📅  TV programa",
+                "Kas rodoma dabar, kas bus vėliau ir kas jau buvo rodyta",
+                "",
+                false,
                 false
         ));
         list.add(new VideoItem.Section(
@@ -276,6 +289,187 @@ public class LrtApi {
 
     public static String buildCategoryUrl(String categoryId) {
         return BASE_API + "/new/?category_id=" + categoryId + "&count=30&order=naujausi";
+    }
+
+    public static String buildLiveStreamUrl(String channelCode) {
+        return "https://www.lrt.lt/servisai/stream_url/live/get_url/?channel=" + channelCode;
+    }
+
+    public static String buildRecordingStreamUrl(String recordUrl) {
+        String path = recordUrl.replaceFirst("^https?://www\\.lrt\\.lt", "");
+        try {
+            path = URLEncoder.encode(path, "UTF-8");
+        } catch (Exception ignored) {
+        }
+        return "https://www.lrt.lt/servisai/stream_url/vod/media_info/play_url/?url=" + path;
+    }
+
+    // ================= TV PROGRAM (EPG) =================
+    // One request returns 4 days back and 6 days ahead for every LRT TV and radio channel (~170 KB gzipped)
+    public static final String TV_PROGRAM_URL = "https://www.lrt.lt/api/json/tvprog";
+    public static final TimeZone LT_TZ = TimeZone.getTimeZone("Europe/Vilnius");
+    private static final long PROGRAM_TTL_MS = 10 * 60 * 1000;
+    private static volatile VideoItem.ProgramGuide programCache;
+
+    public static VideoItem.ProgramGuide getCachedProgramGuide() {
+        return programCache;
+    }
+
+    // On failure the callback still gets the last cached guide (may be null) alongside the error
+    public static void fetchProgramGuide(final boolean force, final Callback<VideoItem.ProgramGuide> callback) {
+        final VideoItem.ProgramGuide cached = programCache;
+        if (!force && cached != null && System.currentTimeMillis() - cached.fetchedAtMs < PROGRAM_TTL_MS) {
+            MAIN_HANDLER.post(new Runnable() {
+                @Override
+                public void run() {
+                    callback.onResult(cached, null);
+                }
+            });
+            return;
+        }
+
+        NET_POOL.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final VideoItem.ProgramGuide guide = fetchProgramGuideSync();
+                    programCache = guide;
+                    MAIN_HANDLER.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.onResult(guide, null);
+                        }
+                    });
+                } catch (final Exception e) {
+                    MAIN_HANDLER.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            callback.onResult(cached, e);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private static VideoItem.ProgramGuide fetchProgramGuideSync() throws Exception {
+        JSONObject all = new JSONObject(httpGetString(TV_PROGRAM_URL)).getJSONObject("all_programs");
+        List<String> keys = new ArrayList<>();
+        JSONArray days = all.optJSONArray("days");
+        if (days != null) {
+            for (int i = 0; i < days.length(); i++) {
+                keys.add(days.optString(i));
+            }
+        } else {
+            Iterator<String> it = all.keys();
+            while (it.hasNext()) {
+                keys.add(it.next());
+            }
+            Collections.sort(keys);
+        }
+
+        VideoItem.ProgramGuide guide = new VideoItem.ProgramGuide();
+        Map<String, VideoItem.ProgramChannel> byCode = new LinkedHashMap<>();
+
+        for (String key : keys) {
+            JSONArray channels = all.optJSONArray(key);
+            Calendar base = parseDayKey(key);
+            if (channels == null || base == null) continue;
+            guide.dayKeys.add(key);
+            guide.dayStarts.add(base.getTimeInMillis());
+            int dayIndex = guide.dayKeys.size() - 1;
+
+            for (int c = 0; c < channels.length(); c++) {
+                JSONObject ch = channels.optJSONObject(c);
+                if (ch == null) continue;
+                String code = jsonStr(ch, "channel");
+                if (code.isEmpty()) continue;
+                VideoItem.ProgramChannel channel = byCode.get(code);
+                if (channel == null) {
+                    channel = new VideoItem.ProgramChannel(code, jsonStr(ch, "title"));
+                    byCode.put(code, channel);
+                }
+
+                JSONArray prog = ch.optJSONArray("prog");
+                if (prog == null) continue;
+                // A day's list is ordered by start time; a start earlier than the previous one means it crossed midnight
+                int dayOffset = 0;
+                long prevStart = Long.MIN_VALUE;
+                for (int p = 0; p < prog.length(); p++) {
+                    JSONObject obj = prog.optJSONObject(p);
+                    if (obj == null) continue;
+                    int startMin = parseMinutes(jsonStr(obj, "time_start"));
+                    if (startMin < 0) continue;
+                    long start = timeOn(base, dayOffset, startMin);
+                    if (start < prevStart) {
+                        dayOffset++;
+                        start = timeOn(base, dayOffset, startMin);
+                    }
+                    prevStart = start;
+                    int endMin = parseMinutes(jsonStr(obj, "time_end"));
+                    long end = endMin >= 0 ? timeOn(base, dayOffset, endMin) : start + 30 * 60 * 1000L;
+                    if (end <= start && endMin >= 0) {
+                        end = timeOn(base, dayOffset + 1, endMin);
+                    }
+
+                    VideoItem.ProgramEntry e = new VideoItem.ProgramEntry();
+                    e.title = jsonStr(obj, "title").trim();
+                    e.description = jsonStr(obj, "description").trim();
+                    e.timeStart = jsonStr(obj, "time_start");
+                    e.timeEnd = jsonStr(obj, "time_end");
+                    e.startMs = start;
+                    e.endMs = end;
+                    e.dayIndex = dayIndex;
+                    e.recordId = jsonStr(obj, "record_article_id");
+                    e.recordUrl = jsonStr(obj, "record_url");
+                    e.isRadio = "1".equals(jsonStr(obj, "is_radio"));
+                    e.channelCode = code;
+                    e.channelTitle = channel.title;
+                    channel.entries.add(e);
+                }
+            }
+        }
+
+        guide.channels.addAll(byCode.values());
+        guide.fetchedAtMs = System.currentTimeMillis();
+        return guide;
+    }
+
+    // optString() turns JSON null into "null"
+    private static String jsonStr(JSONObject obj, String key) {
+        if (obj.isNull(key)) return "";
+        return obj.optString(key, "");
+    }
+
+    private static Calendar parseDayKey(String key) {
+        String[] parts = key.split("\\.");
+        if (parts.length != 3) return null;
+        try {
+            Calendar c = Calendar.getInstance(LT_TZ);
+            c.clear();
+            c.set(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]) - 1, Integer.parseInt(parts[2]), 0, 0, 0);
+            return c;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static int parseMinutes(String hhmm) {
+        String[] parts = hhmm.trim().split(":");
+        if (parts.length != 2) return -1;
+        try {
+            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    private static long timeOn(Calendar base, int dayOffset, int minutes) {
+        Calendar c = (Calendar) base.clone();
+        c.add(Calendar.DAY_OF_MONTH, dayOffset);
+        c.set(Calendar.HOUR_OF_DAY, minutes / 60);
+        c.set(Calendar.MINUTE, minutes % 60);
+        return c.getTimeInMillis();
     }
 
     public static void clearFeedCache(String url) {

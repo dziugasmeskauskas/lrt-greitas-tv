@@ -3,8 +3,13 @@ set -e
 
 PROJ="$(cd "$(dirname "$0")" && pwd)"
 SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
-BT="$SDK/build-tools/34.0.0"
-PLATFORM="$SDK/platforms/android-34/android.jar"
+# Newest installed build-tools and platform unless overridden
+BT="${ANDROID_BUILD_TOOLS:-$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)}"
+BT="${BT%/}"
+PLATFORM_DIR="$(ls -d "$SDK"/platforms/android-*/ | sort -V | tail -1)"
+PLATFORM="${ANDROID_PLATFORM_JAR:-${PLATFORM_DIR%/}/android.jar}"
+# Kept outside the repo so a fresh clone can still update the installed app (same signature)
+KEYSTORE="${LRT_KEYSTORE:-$HOME/.android/lrt-greitas.keystore}"
 JAVA_HOME="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
@@ -43,10 +48,11 @@ zip -q -u "$PROJ/build/unaligned.apk" classes.dex
 echo "5. Aligning APK with zipalign..."
 "$BT/zipalign" -f -p 4 "$PROJ/build/unaligned.apk" "$PROJ/build/aligned.apk"
 
-echo "6. Generating debug keystore & signing APK..."
-if [ ! -f "$PROJ/debug.keystore" ]; then
+echo "6. Generating signing keystore (first run only) & signing APK..."
+if [ ! -f "$KEYSTORE" ]; then
+  mkdir -p "$(dirname "$KEYSTORE")"
   "$JAVA_HOME/bin/keytool" -genkeypair \
-    -keystore "$PROJ/debug.keystore" \
+    -keystore "$KEYSTORE" \
     -storepass android \
     -alias androiddebugkey \
     -keypass android \
@@ -57,13 +63,14 @@ if [ ! -f "$PROJ/debug.keystore" ]; then
 fi
 
 "$BT/apksigner" sign \
-  --ks "$PROJ/debug.keystore" \
+  --ks "$KEYSTORE" \
   --ks-pass pass:android \
   --key-pass pass:android \
   --out "$PROJ/lrt-greitas.apk" \
   "$PROJ/build/aligned.apk"
 
 ls -lh "$PROJ/lrt-greitas.apk"
+[ -n "$NO_INSTALL" ] && exit 0
 
 echo "7. Installing and launching LRT Greitas on Philips TV..."
 adb install -r "$PROJ/lrt-greitas.apk"

@@ -1,5 +1,6 @@
 package lt.lrt.lean;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class VideoItem {
@@ -35,6 +36,7 @@ public class VideoItem {
         public final String url;
         public final boolean isSearch;
         public final boolean isLive;
+        public final boolean isProgram;
 
         public Section(String key, String title, String subtitle, String url, boolean isLive, boolean isSearch) {
             this.key = key;
@@ -43,6 +45,70 @@ public class VideoItem {
             this.url = url;
             this.isLive = isLive;
             this.isSearch = isSearch;
+            this.isProgram = "program".equals(key);
+        }
+    }
+
+    // ================= TV PROGRAM (EPG) =================
+    public static class ProgramEntry {
+        public String title;
+        public String description;
+        public String timeStart;
+        public String timeEnd;
+        public long startMs;
+        public long endMs;
+        public int dayIndex;
+        public String recordId;
+        public String recordUrl;
+        public String channelCode;
+        public String channelTitle;
+        public boolean isRadio;
+
+        public boolean isNow(long now) {
+            return now >= startMs && now < endMs;
+        }
+
+        public boolean isPast(long now) {
+            return now >= endMs;
+        }
+
+        // Only LRT mediateka / radioteka records are playable; Epika links need a subscription
+        public boolean hasRecording() {
+            return recordUrl != null && recordUrl.startsWith("https://www.lrt.lt/") && recordUrl.contains("/irasas/");
+        }
+    }
+
+    public static class ProgramChannel {
+        public final String code;
+        public final String title;
+        public final List<ProgramEntry> entries = new ArrayList<>();
+
+        public ProgramChannel(String code, String title) {
+            this.code = code;
+            this.title = title;
+        }
+    }
+
+    public static class ProgramGuide {
+        public final List<String> dayKeys = new ArrayList<>();
+        public final List<Long> dayStarts = new ArrayList<>();
+        public final List<ProgramChannel> channels = new ArrayList<>();
+        public long fetchedAtMs;
+
+        public ProgramChannel channel(String code) {
+            for (ProgramChannel ch : channels) {
+                if (ch.code.equals(code)) return ch;
+            }
+            return null;
+        }
+
+        public ProgramEntry nextAfter(String code, long now) {
+            ProgramChannel ch = channel(code);
+            if (ch == null) return null;
+            for (ProgramEntry e : ch.entries) {
+                if (e.startMs > now) return e;
+            }
+            return null;
         }
     }
 }
