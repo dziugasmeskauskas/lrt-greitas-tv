@@ -83,6 +83,7 @@ public class MainActivity extends Activity {
     private String currentNextUrl = null;
     private boolean isLoadingMore = false;
     private String customCategoryTitle = null;
+    private String customCategoryId = null;
 
     private int selectedGridIndex = -1;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -118,6 +119,8 @@ public class MainActivity extends Activity {
         final String title;
         // Other names the guide uses, e.g. mediateka's "Dviračio žinios" airs as "Dviračio savaitė"
         final List<String> aliases = new ArrayList<>();
+        // LRT mediateka category with the show's episodes; looked up from LRT when not known yet
+        String categoryId = "";
 
         FavoriteShow(String key, String title) {
             this.key = key;
@@ -134,6 +137,12 @@ public class MainActivity extends Activity {
         VideoItem.ProgramEntry lastAired; // latest aired episode that has a recording
         final List<VideoItem.ProgramEntry> upcoming = new ArrayList<>();
     }
+
+    // One-time move of the shows the menu used to hardcode into favourites, so they stay in the menu (and can be removed)
+    private static final String[] FORMER_MENU_SHOWS = {
+            "Auksinis protas", "Lietuvos tūkstantmečio vaikai", "Kas ir kodėl?", "Panorama", "Dviračio žinios",
+            "Stonkus tiesiogiai", "LRT forumas", "Myliu Lietuvą", "Beatos virtuvė", "Stilius", "Gustavo enciklopedija"
+    };
 
     private final List<FavoriteShow> favorites = new ArrayList<>();
     private VideoItem.Section favoritesSection;
@@ -169,8 +178,9 @@ public class MainActivity extends Activity {
                 false
         );
         loadFavorites();
-        if (!favorites.isEmpty()) {
-            sections.add(indexOfProgramSection() + 1, favoritesSection);
+        insertFavoriteSections();
+        for (FavoriteShow f : new ArrayList<>(favorites)) {
+            if (f.categoryId.isEmpty()) resolveFavoriteCategory(f);
         }
 
         buildUi();
@@ -500,10 +510,9 @@ public class MainActivity extends Activity {
                         openProgramSection(item.channelCode);
                         return true;
                     }
-                    // Inside a show's episode list, long OK stars the show
-                    if (customCategoryTitle != null && !item.isLive) {
-                        toggleFavorite(customCategoryTitle, repeatedEpisodeTitleKeys());
-                        updateHeroWithItem(item);
+                    // Inside one show's episodes (episode list or a starred show), long OK stars/unstars the show
+                    if (currentShowTitle() != null && !item.isLive) {
+                        toggleCurrentShowFavorite();
                         return true;
                     }
                     if (item.categoryId != null && !item.categoryId.isEmpty() && !item.isLive) {
@@ -531,9 +540,8 @@ public class MainActivity extends Activity {
                                 openProgramSection(item.channelCode);
                                 return true;
                             }
-                            if (customCategoryTitle != null && !item.isLive) {
-                                toggleFavorite(customCategoryTitle, repeatedEpisodeTitleKeys());
-                                updateHeroWithItem(item);
+                            if (currentShowTitle() != null && !item.isLive) {
+                                toggleCurrentShowFavorite();
                                 return true;
                             }
                             if (item.categoryId != null && !item.categoryId.isEmpty() && !item.isLive) {
@@ -814,6 +822,7 @@ public class MainActivity extends Activity {
         if (index < 0 || index >= sections.size()) return;
         activeSectionIndex = index;
         customCategoryTitle = null;
+        customCategoryId = null;
         navAdapter.notifyDataSetChanged();
 
         VideoItem.Section sec = sections.get(index);
@@ -854,6 +863,7 @@ public class MainActivity extends Activity {
 
     private void openCategoryDrilldown(String categoryId, String categoryTitle) {
         customCategoryTitle = categoryTitle != null ? categoryTitle : "Laidos įrašai";
+        customCategoryId = categoryId;
         searchContainer.setVisibility(View.GONE);
         heroCategoryBadge.setText(customCategoryTitle.toUpperCase());
         heroMetaText.setText("Visos šios laidos serijos LRT mediatekoje (ATGAL – grįžti)");
@@ -947,13 +957,13 @@ public class MainActivity extends Activity {
                 meta.append("▶ Tęsti nuo ").append(LrtApi.formatDuration(savedMs / 1000));
             }
         }
-        if (!item.isLive && item.categoryId != null && !item.categoryId.isEmpty() && customCategoryTitle == null) {
+        if (!item.isLive && item.categoryId != null && !item.categoryId.isEmpty() && currentShowTitle() == null) {
             if (meta.length() > 0) meta.append("  •  ");
             meta.append("Ilgas OK: visos laidos serijos");
         }
-        if (!item.isLive && customCategoryTitle != null) {
+        if (!item.isLive && currentShowTitle() != null) {
             if (meta.length() > 0) meta.append("  •  ");
-            meta.append(isFavorite(LrtApi.showKey(customCategoryTitle))
+            meta.append(isFavorite(LrtApi.showKey(currentShowTitle()))
                     ? "★ Mėgstama laida (ilgas OK: pašalinti)"
                     : "Ilgas OK: ★ į mėgstamas");
         }
@@ -1622,9 +1632,18 @@ public class MainActivity extends Activity {
                 for (int a = 0; aliases != null && a < aliases.length(); a++) {
                     f.aliases.add(aliases.getString(a));
                 }
+                f.categoryId = o.optString("categoryId", "");
                 favorites.add(f);
             }
         } catch (Exception ignored) {
+        }
+        if (!prefs.getBoolean("favorites_seeded", false)) {
+            for (String name : FORMER_MENU_SHOWS) {
+                String key = LrtApi.showKey(name);
+                if (!isFavorite(key)) favorites.add(new FavoriteShow(key, name));
+            }
+            prefs.edit().putBoolean("favorites_seeded", true).apply();
+            saveFavorites();
         }
     }
 
@@ -1632,7 +1651,11 @@ public class MainActivity extends Activity {
         JSONArray arr = new JSONArray();
         for (FavoriteShow f : favorites) {
             try {
-                arr.put(new JSONObject().put("key", f.key).put("title", f.title).put("aliases", new JSONArray(f.aliases)));
+                arr.put(new JSONObject()
+                        .put("key", f.key)
+                        .put("title", f.title)
+                        .put("aliases", new JSONArray(f.aliases))
+                        .put("categoryId", f.categoryId));
             } catch (JSONException ignored) {
             }
         }
@@ -1652,10 +1675,10 @@ public class MainActivity extends Activity {
     }
 
     private void toggleFavorite(String title) {
-        toggleFavorite(title, new ArrayList<String>());
+        toggleFavorite(title, new ArrayList<String>(), null);
     }
 
-    private void toggleFavorite(String title, List<String> aliases) {
+    private void toggleFavorite(String title, List<String> aliases, String categoryId) {
         String key = LrtApi.showKey(title);
         if (key.isEmpty()) return;
         FavoriteShow existing = findFavorite(key);
@@ -1667,17 +1690,44 @@ public class MainActivity extends Activity {
             for (String alias : aliases) {
                 if (!alias.equals(key) && !fav.aliases.contains(alias)) fav.aliases.add(alias);
             }
+            if (categoryId != null) fav.categoryId = categoryId;
             favorites.add(fav);
-            Toast.makeText(this, "★ " + fav.title + " – pridėta į „Mėgstamos laidos“", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "★ " + fav.title + " – pridėta į meniu ir „Mėgstamos laidos“", Toast.LENGTH_SHORT).show();
+            if (fav.categoryId.isEmpty()) resolveFavoriteCategory(fav);
         }
         saveFavorites();
-        syncFavoritesSection();
+        rebuildFavoriteSections();
+    }
+
+    // The show whose episodes the grid shows (an episode list or a starred show's menu item), else null
+    private String currentShowTitle() {
+        if (customCategoryTitle != null) return customCategoryTitle;
+        FavoriteShow fav = favoriteForSection(sections.get(activeSectionIndex));
+        return fav != null ? fav.title : null;
+    }
+
+    private void toggleCurrentShowFavorite() {
+        FavoriteShow fav = favoriteForSection(sections.get(activeSectionIndex));
+        String categoryId = customCategoryTitle != null ? customCategoryId : (fav != null ? fav.categoryId : null);
+        toggleFavorite(currentShowTitle(), repeatedTitleKeys(currentItems), categoryId);
+        if (selectedGridIndex >= 0 && selectedGridIndex < currentItems.size() && currentShowTitle() != null) {
+            updateHeroWithItem(currentItems.get(selectedGridIndex));
+        }
+    }
+
+    private FavoriteShow favoriteForSection(VideoItem.Section sec) {
+        if (!sec.key.startsWith("fav:")) return null;
+        String key = sec.key.substring(4);
+        for (FavoriteShow f : favorites) {
+            if (f.key.equals(key)) return f;
+        }
+        return null;
     }
 
     // Episode titles that repeat across a show's list are its on-air name rather than episode names
-    private List<String> repeatedEpisodeTitleKeys() {
+    private static List<String> repeatedTitleKeys(List<VideoItem> items) {
         Map<String, Integer> counts = new HashMap<>();
-        for (VideoItem item : currentItems) {
+        for (VideoItem item : items) {
             String k = LrtApi.showKey(item.title);
             if (!k.isEmpty()) counts.put(k, counts.containsKey(k) ? counts.get(k) + 1 : 1);
         }
@@ -1688,14 +1738,44 @@ public class MainActivity extends Activity {
         return keys;
     }
 
+    // Category numbers come from LRT: search the show's name and take the category most matching episodes are filed under
+    private void resolveFavoriteCategory(final FavoriteShow fav) {
+        LrtApi.fetchFeed(LrtApi.buildSearchUrl(fav.key), false, new LrtApi.Callback<VideoItem.FeedPage>() {
+            @Override
+            public void onResult(VideoItem.FeedPage page, Exception error) {
+                if (page == null || page.items == null || !favorites.contains(fav) || !fav.categoryId.isEmpty()) return;
+                Map<String, Integer> votes = new HashMap<>();
+                for (VideoItem item : page.items) {
+                    if (item.categoryId == null || item.categoryId.isEmpty()) continue;
+                    if (fav.matches(LrtApi.showKey(item.categoryTitle)) || fav.matches(LrtApi.showKey(item.title))) {
+                        votes.put(item.categoryId, votes.containsKey(item.categoryId) ? votes.get(item.categoryId) + 1 : 1);
+                    }
+                }
+                String best = null;
+                for (Map.Entry<String, Integer> e : votes.entrySet()) {
+                    if (best == null || e.getValue() > votes.get(best)) best = e.getKey();
+                }
+                if (best == null) return;
+                fav.categoryId = best;
+                List<VideoItem> episodes = new ArrayList<>();
+                for (VideoItem item : page.items) {
+                    if (best.equals(item.categoryId)) episodes.add(item);
+                }
+                for (String alias : repeatedTitleKeys(episodes)) {
+                    if (!fav.matches(alias)) fav.aliases.add(alias);
+                }
+                saveFavorites();
+                rebuildFavoriteSections();
+            }
+        });
+    }
+
     private void removeFavorite(FavoriteShow fav, int position) {
         favorites.remove(fav);
         saveFavorites();
         Toast.makeText(this, "Pašalinta iš mėgstamų: " + fav.title, Toast.LENGTH_SHORT).show();
-        if (favorites.isEmpty()) {
-            syncFavoritesSection();
-            return;
-        }
+        rebuildFavoriteSections();
+        if (favorites.isEmpty()) return;
         showFavorites();
         // Stay near the removed row
         for (int i = Math.min(position, programRows.size() - 1); i >= 0; i--) {
@@ -1713,44 +1793,64 @@ public class MainActivity extends Activity {
         return 0;
     }
 
-    // The "Mėgstamos laidos" section exists only while something is starred; it sits right under "TV programa"
-    private void syncFavoritesSection() {
-        int favIndex = -1;
+    private int indexOfSectionKey(String key) {
         for (int i = 0; i < sections.size(); i++) {
-            if (sections.get(i).isFavorites) favIndex = i;
+            if (sections.get(i).key.equals(key)) return i;
         }
-        boolean want = !favorites.isEmpty();
-        if (want == (favIndex >= 0)) return;
+        return -1;
+    }
+
+    private VideoItem.Section favoriteShowSection(FavoriteShow f) {
+        return new VideoItem.Section(
+                "fav:" + f.key,
+                "⭐  " + f.title,
+                "Visos laidos serijos LRT mediatekoje  •  Ilgas OK: pašalinti iš mėgstamų",
+                f.categoryId.isEmpty() ? LrtApi.buildSearchUrl(f.key) : LrtApi.buildCategoryUrl(f.categoryId),
+                false,
+                false
+        );
+    }
+
+    // Starred shows sit right under "TV programa": the "Mėgstamos laidos" overview, then one menu item per show
+    private void insertFavoriteSections() {
+        for (int i = sections.size() - 1; i >= 0; i--) {
+            VideoItem.Section sec = sections.get(i);
+            if (sec.isFavorites || sec.key.startsWith("fav:")) sections.remove(i);
+        }
+        if (favorites.isEmpty()) return;
+        int at = indexOfProgramSection() + 1;
+        sections.add(at++, favoritesSection);
+        for (FavoriteShow f : favorites) {
+            sections.add(at++, favoriteShowSection(f));
+        }
+    }
+
+    private void rebuildFavoriteSections() {
         if (pendingSectionLoad != null) {
             handler.removeCallbacks(pendingSectionLoad);
         }
-
-        if (want) {
-            int at = indexOfProgramSection() + 1;
-            sections.add(at, favoritesSection);
-            if (activeSectionIndex >= at) activeSectionIndex++;
-        } else {
-            boolean wasActive = activeSectionIndex == favIndex;
-            sections.remove(favIndex);
-            if (activeSectionIndex > favIndex) activeSectionIndex--;
-            if (wasActive) {
-                int programIndex = indexOfProgramSection();
-                navAdapter.notifyDataSetChanged();
-                navListView.setSelection(programIndex);
-                selectSection(programIndex, false);
-                navListView.requestFocus();
-                return;
-            }
-        }
-        navAdapter.notifyDataSetChanged();
-        // Keep the sidebar from jumping: same rows in the same place, selection follows the active section
+        String activeKey = sections.get(activeSectionIndex).key;
+        // Keep the sidebar from jumping: the rows stay where they are, the selection follows the active section
         View first = navListView.getChildAt(0);
-        int top = 0;
-        if (first != null) {
-            int rowHeight = first.getHeight() + navListView.getDividerHeight();
-            top = first.getTop() + (activeSectionIndex - navListView.getFirstVisiblePosition()) * rowHeight;
+        int firstPosition = navListView.getFirstVisiblePosition();
+        int firstTop = first != null ? first.getTop() : 0;
+        int rowHeight = first != null ? first.getHeight() + navListView.getDividerHeight() : 0;
+
+        insertFavoriteSections();
+        int index = indexOfSectionKey(activeKey);
+        if (index >= 0) {
+            activeSectionIndex = index;
+            navAdapter.notifyDataSetChanged();
+            navListView.setSelectionFromTop(index, firstTop + (index - firstPosition) * rowHeight);
+            return;
         }
-        navListView.setSelectionFromTop(activeSectionIndex, top);
+        // The open show was just unstarred: go to the overview, or the guide when nothing is starred
+        int fallback = favorites.isEmpty() ? indexOfProgramSection() : indexOfSectionKey("favorites");
+        activeSectionIndex = fallback;
+        navAdapter.notifyDataSetChanged();
+        navListView.setSelection(fallback);
+        selectSection(fallback, false);
+        navListView.requestFocus();
     }
 
     private FavoriteMatch matchFavorite(FavoriteShow fav) {

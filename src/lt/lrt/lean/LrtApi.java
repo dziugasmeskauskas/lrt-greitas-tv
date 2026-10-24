@@ -69,22 +69,6 @@ public class LrtApi {
                 false
         ));
         list.add(new VideoItem.Section(
-                "auksinis_protas",
-                "🧠  Auksinis protas",
-                "Intelektualus žaidimas su Arūnu Valinsku ir Andriumi Tapinu",
-                BASE_API + "/new/?category_id=114&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "tukstantmecio_vaikai",
-                "🎓  Tūkstantmečio vaikai",
-                "Žinių viktorina Lietuvos moksleiviams",
-                BASE_API + "/new/?category_id=304&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
                 "search",
                 "🔍  Paieška",
                 "Ieškokite laidų, filmų, koncertų ir įrašų LRT mediatekoje",
@@ -105,78 +89,6 @@ public class LrtApi {
                 "🆕  Naujausi įrašai",
                 "Naujausi LRT mediatekos vaizdo įrašai",
                 BASE_API + "/new/?count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "kas_ir_kodel",
-                "⭐  Kas ir kodėl?",
-                "Viktorina „Kas ir kodėl?“ – greiti klausimai ir atsakymai",
-                BASE_API + "/new/?category_id=234&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "panorama",
-                "⭐  Panorama",
-                "Pagrindinė LRT vakaro žinių laida",
-                BASE_API + "/new/?category_id=10265&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "dviracio_zinios",
-                "⭐  Dviračio žinios",
-                "Politinės satyros ir humoro laida",
-                BASE_API + "/new/?category_id=614&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "stonkus",
-                "⭐  Stonkus tiesiogiai",
-                "Pokalbių ir pramogų šou su Mantu Stonkumi",
-                BASE_API + "/new/?category_id=28599&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "lrt_forumas",
-                "⭐  LRT forumas",
-                "Politinių ir visuomeninių diskusijų laida",
-                BASE_API + "/new/?category_id=320&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "myliu_lietuva",
-                "⭐  Myliu Lietuvą",
-                "Azartiškas žaidimas apie Lietuvą",
-                BASE_API + "/new/?category_id=18872&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "beatos_virtuve",
-                "⭐  Beatos virtuvė",
-                "Kulinarijos ir gero skonio laida",
-                BASE_API + "/new/?category_id=652&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "stilius",
-                "⭐  Stilius",
-                "Gyvenimo būdo ir asmenybių istorijos",
-                BASE_API + "/new/?category_id=479&count=30&order=naujausi",
-                false,
-                false
-        ));
-        list.add(new VideoItem.Section(
-                "gustavo",
-                "⭐  Gustavo enciklopedija",
-                "Pažintinė laida vaikams ir visai šeimai",
-                BASE_API + "/new/?category_id=198&count=30&order=naujausi",
                 false,
                 false
         ));

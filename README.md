@@ -1,12 +1,12 @@
 # LRT Greitas (`lt.lrt.lean`) — Ultra-Lean Native Android TV App for LRT.lt
 
-A blazing-fast, **69 KB**, zero-dependency native Android TV application for **LRT.lt** (`Lietuvos nacionalinis radijas ir televizija`), built directly against the Android SDK without WebViews, React Native, or bloated frameworks.
+A blazing-fast, **73 KB**, zero-dependency native Android TV application for **LRT.lt** (`Lietuvos nacionalinis radijas ir televizija`), built directly against the Android SDK without WebViews, React Native, or bloated frameworks.
 
 ---
 
 ## Features
 
-- **100% Native Android TV UI (< 15 MB RAM, 69 KB APK):**
+- **100% Native Android TV UI (< 15 MB RAM, 73 KB APK):**
   - Instant startup (`< 150 ms`) and 60 fps D-pad navigation even on budget MediaTek Android TVs.
   - Parallel background feed prefetching and in-memory LRU thumbnail cache.
 - **📅 TV programa (Program Guide):**
@@ -15,18 +15,16 @@ A blazing-fast, **69 KB**, zero-dependency native Android TV application for **L
   - **OK** on the current show plays the channel live; **OK** on an aired show (or a rerun) plays its LRT mediateka/radioteka recording (`▶ ĮRAŠAS`), with resume memory shared with the rest of the app.
   - Channel and day tabs on top. In the list: **ATGAL** jumps to the tabs, **CH+/CH−** switch channel, **⏪/⏩** switch day, **◀** back to the menu.
   - Long-press **OK** (or **MENU**) on a live channel opens its program; the remote's **GUIDE** key opens it from anywhere. The live hero also shows what's next (`Toliau`).
-- **❤️ Mėgstamos laidos (Favourite Shows):**
-  - Hold **OK** (or **MENU**) on a show in the TV programa guide, or inside a show's episode list, to star it (★). The section appears in the menu once something is starred.
-  - Lists each favourite once, at its next airing, grouped by day with time and channel; the hero adds the later airings. Shows not in the guide's next 6 days go under "Kita serija dar neskelbiama".
-  - **OK** plays it live if it's on now, otherwise the latest recorded episode; holding **OK** removes it.
+- **❤️ Mėgstamos laidos (Favourite Shows) — your show list:**
+  - Hold **OK** (or **MENU**) on a show in the TV programa guide, or inside a show's episodes, to star it (★). Each starred show gets its own ⭐ menu item with all its episodes; holding **OK** there unstars it.
+  - The **Mėgstamos laidos** overview lists each favourite once, at its next airing, grouped by day with time and channel; the hero adds the later airings. Shows not in the guide's next 6 days go under "Kita serija dar neskelbiama". **OK** plays it live if it's on now, otherwise the latest recorded episode.
+  - No hand-typed category numbers: a show's mediateka category comes from LRT (the episode list it was starred from, or an LRT search for its name), and is saved with the favourite.
+  - On first run, the shows the menu used to hardcode (Auksinis protas, Lietuvos tūkstantmečio vaikai, Kas ir kodėl?, Panorama, …) become regular favourites, so they can be removed.
   - Matching ignores suffixes like "(subtitruota)", and starring from an episode list also picks up the on-air name when it differs (mediateka "Dviračio žinios" airs as "Dviračio savaitė").
 - **Dedicated Sections:**
   - 🔴 **Tiesiogiai (Live):** Live HLS streams for `LRT TELEVIZIJA`, `LRT PLIUS`, `LRT LITUANICA`, `LRT RADIJAS`, `LRT KLASIKA`, and `LRT OPUS` with real-time on-air program schedules.
-  - 🏆 **Auksinis protas** (`category_id=114`)
-  - 🎓 **Tūkstantmečio vaikai** (`category_id=304`)
   - 🔥 **Populiariausi** & 🆕 **Naujausi**
-  - 📺 **Populiarios laidos:** *Panorama*, *Dienos tema*, *Laba diena, Lietuva*, *Svarbi valanda*, *Stilius*, *Beatos virtuvė*, *Keliai. Mašinos. Žmonės*, * Nacionalinė ekspedicija*, *Daiktų istorijos*, * Duokim garo!*, and more.
-  - 🎬 **Visos rubrikos:** *Filmai*, *Serialai*, *Dokumentika*, *Kultūra*, *Sportas*, *Vaikams*, *Koncertai*, *Archyvai*.
+  - 📰 **LRT sections** (by LRT's own section paths): *Aktualijos*, *Žinios*, *Pramogos*, *Viktorinos*, *Sportas*, *Krepšinis / Eurolyga*, *Menas ir kultūra*, *Gyvenimas*, *Mokslas ir pažinimas*, *Muzika ir koncertai*, *Vaikams*, *Tinklalaidės*.
 - **🔍 Native Lithuanian D-Pad Search (`Paieška`):**
   - Built-in on-screen Lithuanian keyboard (`Ą Č Ę Ė Į Š Ų Ū Ž`) optimized for TV remote directional navigation.
 - **Native HLS Video Player (`PlayerActivity`):**
